@@ -21,3 +21,6 @@ models/*/checkpoint-*/
 # Local datasets and generated CSV artifacts
 combined_hate_speech_dataset.csv
 promotional/FINAL_MERGED_SMS_DATASET.csv
+
+# Local editor settings
+.vscode/
