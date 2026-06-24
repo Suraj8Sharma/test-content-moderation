@@ -58,20 +58,20 @@ class Config:
     # ── Model & tokenizer ─────────────────────────────────────────────────
     MODEL_NAME   = "google/muril-base-cased"
     MAX_LENGTH   = 256
-    EPOCHS       = 8
-    
-    # ── Training hyperparameters (optimized for 21GB RTX 4000 Ada × 4) ──
-    BATCH_SIZE            = 32           # Safe for 21 GB VRAM per GPU
-    GRADIENT_ACCUMULATION = 8            # Effective batch = 256
-    LEARNING_RATE         = 2e-5
-    WARMUP_RATIO          = 0.2
+    EPOCHS       = 10
+
+    # ── Training hyperparameters (single RTX 4000 Ada, 20 GB VRAM) ──
+    BATCH_SIZE            = 16           # Safe for 20 GB VRAM on one GPU
+    GRADIENT_ACCUMULATION = 4            # Effective batch = 64
+    LEARNING_RATE         = 3e-5
+    WARMUP_RATIO          = 0.06
     WEIGHT_DECAY          = 0.01
 
     # ── Advanced optimizations ─────────────────────────────────────────
     USE_FP16              = True          # Mixed precision
-    GRADIENT_CHECKPOINTING = True        # Trade compute for memory
+    GRADIENT_CHECKPOINTING = False       # OFF: FP16 + grad checkpointing hurts convergence
     USE_FLASH_ATTENTION   = False        # Disable: not installed in this env
-    NUM_WORKERS           = 4            # Parallel data loading
+    NUM_WORKERS           = 2            # Parallel data loading
     
     # ── Label mapping ─────────────────────────────────────────────────────
     LABEL2ID = {"non_abusive": 0, "abusive": 1}
@@ -433,8 +433,8 @@ def main(args: Optional[argparse.Namespace] = None):
         parser.add_argument(
             "--cuda-devices",
             type=str,
-            default="0,1,2,3",
-            help="Comma-separated CUDA visible devices to use (default: 0,1,2,3)",
+            default="1",
+            help="Comma-separated CUDA visible devices to use (default: 1)",
         )
         args = parser.parse_args()
 
@@ -458,7 +458,7 @@ def main(args: Optional[argparse.Namespace] = None):
             pass
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-    visible_devices = [x.strip() for x in str(os.environ.get("CUDA_VISIBLE_DEVICES", "0")).split(",") if x.strip()]
+    visible_devices = [x.strip() for x in str(os.environ.get("CUDA_VISIBLE_DEVICES", "1")).split(",") if x.strip()]
     if len(visible_devices) > 1 and args.batch_size is None:
         config.BATCH_SIZE = 8
 
@@ -608,11 +608,10 @@ def main(args: Optional[argparse.Namespace] = None):
         id2label=config.ID2LABEL,
         label2id=config.LABEL2ID,
     )
-    # Ensure hidden states are returned (required by auxiliary head)
-    try:
-        model.config.output_hidden_states = True
-    except Exception:
-        pass
+    # output_hidden_states is NOT set here — enabling it causes the Trainer's
+    # eval loop to collect hidden states (variable seq len per batch) alongside
+    # logits, making predictions inhomogeneous and crashing compute_metrics.
+    # Enable only if use_aux_loss=True is passed to WeightedTrainer.
     
     # Enable gradient checkpointing
     if config.GRADIENT_CHECKPOINTING:
@@ -658,7 +657,7 @@ def main(args: Optional[argparse.Namespace] = None):
         
         # FP16 mixed precision
         fp16=config.USE_FP16,
-        fp16_full_eval=config.USE_FP16,
+        label_smoothing_factor=0.1,
 
         # Evaluation & saving (transformers ≥ 4.41 uses eval_strategy)
         eval_strategy="epoch",
@@ -679,12 +678,11 @@ def main(args: Optional[argparse.Namespace] = None):
         
         # Data loading
         dataloader_num_workers=config.NUM_WORKERS,
-        group_by_length=True,
         
         # Other
         push_to_hub=False,
         remove_unused_columns=True,
-        ddp_find_unused_parameters=False if os.environ.get("LOCAL_RANK") is not None else True,
+        ddp_find_unused_parameters=False,
     )
     
     print(f"✅  Training config set")
@@ -708,13 +706,13 @@ def main(args: Optional[argparse.Namespace] = None):
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         callbacks=[
             EarlyStoppingCallback(
-                early_stopping_patience=3,
-                early_stopping_threshold=0.0005
+                early_stopping_patience=4,
+                early_stopping_threshold=0.001
             )
         ],
     )
@@ -811,12 +809,17 @@ def main(args: Optional[argparse.Namespace] = None):
 
 def load_trained_classifier(model_dir: Path):
     """Load fine-tuned model for inference."""
-    from transformers import pipeline
+    from transformers import AutoTokenizer, pipeline
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), fix_mistral_regex=True)
+    except TypeError:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
     
     classifier = pipeline(
         task="text-classification",
         model=str(model_dir),
-        tokenizer=str(model_dir),
+        tokenizer=tokenizer,
         device=1 if torch.cuda.is_available() else -1,
         truncation=True,
         max_length=128,

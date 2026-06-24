@@ -176,7 +176,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument(
         "--data-path",
         type=Path,
-        default=Path(__file__).parent / "promotional" / "FINAL_MERGED_SMS_DATASET.csv",
+        default=Path(__file__).parent / "FINAL_MERGED_SMS_DATASET.csv",
         help="Path to FINAL_MERGED_SMS_DATASET.csv",
     )
     parser.add_argument(

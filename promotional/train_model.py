@@ -121,7 +121,7 @@ def train_model(model_key: str, hf_dataset: DatasetDict, output_dir: str, epochs
         args=training_args,
         train_dataset=tokenized_datasets["train"],
         eval_dataset=tokenized_datasets["validation"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics_factory(f1_metric, accuracy_metric, precision_metric, recall_metric),
         callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],

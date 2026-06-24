@@ -4,7 +4,7 @@
 from pathlib import Path
 from typing import List, Dict, Any
 import torch
-from transformers import pipeline
+from transformers import AutoTokenizer, pipeline
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXAMPLE 1: Load Pre-trained MuRIL Classifier
@@ -19,11 +19,16 @@ def load_muril_classifier():
             f"Model not found at {model_path}\n"
             "Train first: python muril_local_train.py"
         )
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_path), fix_mistral_regex=True)
+    except TypeError:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_path))
     
     classifier = pipeline(
         task="text-classification",
         model=str(model_path),
-        tokenizer=str(model_path),
+        tokenizer=tokenizer,
         device=0 if torch.cuda.is_available() else -1,
         truncation=True,
         max_length=128,
